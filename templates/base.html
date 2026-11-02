@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Salary Manager{% endblock %} | Salary App</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  {% if session.logged_in %}
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="{{ url_for('dashboard') }}" class="header-brand">
+        <span class="brand-icon">💼</span>
+        <span class="brand-text">Salary Manager</span>
+      </a>
+      <a href="{{ url_for('logout') }}" class="btn btn-logout">🚪 Logout</a>
+    </div>
+  </header>
+  {% endif %}
+
+  <main class="main-content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-container">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">
+              {% if category == 'success' %}✅{% else %}⚠️{% endif %}
+              {{ message }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}{{ emp['name'] }}{% endblock %}
+{% block content %}
+
+{% set MONTHS_EN = ["","January","February","March","April","May","June","July","August","September","October","November","December"] %}
+
+<!-- Back + Actions -->
+<div class="profile-topbar">
+  <a href="{{ url_for('dashboard', month=selected_month, year=selected_year) }}" class="back-link">← All Employees</a>
+  <div class="profile-actions">
+    <a href="{{ url_for('edit_employee', emp_id=emp['id']) }}" class="btn btn-secondary">✏️ Edit</a>
+    <form method="POST"
+          action="{{ url_for('delete_employee', emp_id=emp['id']) }}"
+          onsubmit="return confirm('Are you sure you want to delete {{ emp['name'] }}?\n\nAll transactions will also be deleted.')">
+      <button type="submit" class="btn btn-danger">🗑️ Delete</button>
+    </form>
+  </div>
+</div>
+
+<!-- Employee Header Card -->
+<div class="profile-header-card">
+  <div class="profile-name">{{ emp['name'] }}</div>
+
+  <div class="profile-stats">
+    <div class="stat-box stat-salary">
+      <div class="stat-box-label">💰 Monthly Salary</div>
+      <div class="stat-box-value">₹{{ "{:,.0f}".format(emp['monthly_salary']) }}</div>
+    </div>
+    <div class="stat-box stat-taken">
+      <div class="stat-box-label">📤 Taken</div>
+      <div class="stat-box-value">₹{{ "{:,.0f}".format(total_taken) }}</div>
+    </div>
+    <div class="stat-box stat-remaining {% if remaining < 0 %}stat-negative{% endif %}">
+      <div class="stat-box-label">💵 Remaining</div>
+      <div class="stat-box-value">₹{{ "{:,.0f}".format(remaining) }}</div>
+    </div>
+  </div>
+
+  <!-- Month Selector -->
+  <div class="month-bar profile-month-bar">
+    <span class="month-label">📅 Month:</span>
+    <form method="GET" action="{{ url_for('employee_profile', emp_id=emp['id']) }}" class="month-form" id="profMonthForm">
+      <select name="month" class="month-select" onchange="document.getElementById('profMonthForm').submit()">
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>
+            {{ MONTHS_EN[m] }}
+          </option>
+        {% endfor %}
+      </select>
+      <select name="year" class="month-select" onchange="document.getElementById('profMonthForm').submit()">
+        {% for y in range(current_year - 2, current_year + 1) %}
+          <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% if selected_month != current_month or selected_year != current_year %}
+      <span class="viewing-badge">📂 Past Month</span>
+    {% else %}
+      <span class="current-badge">✅ Current Month</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Add Money Taken Form -->
+{% if selected_month == current_month and selected_year == current_year %}
+<div class="add-txn-section">
+  <h2 class="section-title">💵 Money Taken</h2>
+  <form method="POST"
+        action="{{ url_for('add_transaction', emp_id=emp['id']) }}"
+        class="add-txn-form"
+        id="addTxnForm"
+        onsubmit="return validateAmount()">
+    <div class="add-txn-row">
+      <input
+        type="number"
+        name="amount"
+        id="amountInput"
+        class="form-input amount-input"
+        placeholder="Enter amount (₹)"
+        min="1"
+        step="1"
+        required
+      >
+      <button type="submit" class="btn btn-success btn-lg add-txn-btn">
+        ✅ Save
+      </button>
+    </div>
+    <p class="txn-hint">📝 Date and time will be saved automatically.</p>
+  </form>
+</div>
+{% else %}
+<div class="past-month-notice">
+  📂 This is past month data — view only.
+</div>
+{% endif %}
+
+<!-- Transaction History -->
+<div class="txn-section">
+  <h2 class="section-title">📋 Transaction History — {{ MONTHS_EN[selected_month] }} {{ selected_year }}</h2>
+
+  {% if txns %}
+  <div class="txn-table-wrap">
+    <table class="txn-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Time</th>
+          <th>Amount</th>
+          <th>Delete</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for txn in txns %}
+        <tr>
+          <td class="txn-date">
+            {% set parts = txn['transaction_date'].split('-') %}
+            {% set MONTHS_SHORT = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"] %}
+            {{ parts[2] }} {{ MONTHS_SHORT[parts[1]|int] }}
+          </td>
+          <td class="txn-time">{{ txn['transaction_time'] }}</td>
+          <td class="txn-amount">₹{{ "{:,.0f}".format(txn['amount']) }}</td>
+          <td>
+            <form method="POST"
+                  action="{{ url_for('delete_transaction', txn_id=txn['id']) }}"
+                  onsubmit="return confirm('Are you sure you want to delete the ₹{{ '{:,.0f}'.format(txn['amount']) }} transaction?')">
+              <button type="submit" class="btn-icon-delete" title="Delete">🗑️</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="txn-total-row">
+          <td colspan="2"><strong>Total</strong></td>
+          <td class="txn-amount"><strong>₹{{ "{:,.0f}".format(total_taken) }}</strong></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+    <div class="empty-state empty-state-sm">
+      <div class="empty-icon">📭</div>
+      <p>No transactions this month.</p>
+    </div>
+  {% endif %}
+</div>
+
+<script>
+function validateAmount() {
+  const val = parseFloat(document.getElementById('amountInput').value);
+  if (!val || val <= 0) {
+    alert('Please enter a valid amount.');
+    return false;
+  }
+  return true;
+}
+</script>
+{% endblock %}

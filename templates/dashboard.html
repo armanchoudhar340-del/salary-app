@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}All Employees{% endblock %}
+{% block content %}
+
+{% set MONTHS_EN = ["","January","February","March","April","May","June","July","August","September","October","November","December"] %}
+
+<div class="page-header">
+  <div class="page-header-top">
+    <h1 class="page-title">👥 All Employees</h1>
+    <a href="{{ url_for('add_employee') }}" class="btn btn-primary btn-lg">
+      ➕ Add Employee
+    </a>
+  </div>
+
+  <!-- Month Selector -->
+  <div class="month-bar">
+    <span class="month-label">📅 Select Month:</span>
+    <form method="GET" action="{{ url_for('dashboard') }}" class="month-form" id="monthForm">
+      <input type="hidden" name="search" value="{{ search }}">
+      <select name="month" class="month-select" onchange="document.getElementById('monthForm').submit()">
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>
+            {{ MONTHS_EN[m] }}
+          </option>
+        {% endfor %}
+      </select>
+      <select name="year" class="month-select" onchange="document.getElementById('monthForm').submit()">
+        {% for y in range(current_year - 2, current_year + 1) %}
+          <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% if selected_month != current_month or selected_year != current_year %}
+      <span class="viewing-badge">📂 Viewing Past Month</span>
+    {% else %}
+      <span class="current-badge">✅ Current Month</span>
+    {% endif %}
+  </div>
+
+  <!-- Search Bar -->
+  <form method="GET" action="{{ url_for('dashboard') }}" class="search-form">
+    <input type="hidden" name="month" value="{{ selected_month }}">
+    <input type="hidden" name="year" value="{{ selected_year }}">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input
+        type="text"
+        name="search"
+        value="{{ search }}"
+        placeholder="Search by name…"
+        class="search-input"
+      >
+      {% if search %}
+        <a href="{{ url_for('dashboard', month=selected_month, year=selected_year) }}" class="search-clear">✕</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% if employees %}
+  <div class="employee-grid">
+    {% for emp in employees %}
+    <div class="emp-card">
+      <div class="emp-card-name">{{ emp.name }}</div>
+      <div class="emp-card-rows">
+        <div class="emp-stat">
+          <span class="emp-stat-label">💰 Monthly Salary</span>
+          <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
+        </div>
+        <div class="emp-stat">
+          <span class="emp-stat-label">📤 Taken</span>
+          <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
+        </div>
+        <div class="emp-stat">
+          <span class="emp-stat-label">💵 Remaining</span>
+          <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">
+            ₹{{ "{:,.0f}".format(emp.remaining) }}
+          </span>
+        </div>
+      </div>
+      <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
+         class="btn btn-open btn-full">
+        OPEN →
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state">
+    <div class="empty-icon">👤</div>
+    {% if search %}
+      <p>No employee found with name "<strong>{{ search }}</strong>".</p>
+      <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Show All</a>
+    {% else %}
+      <p>No employees added yet.</p>
+      <a href="{{ url_for('add_employee') }}" class="btn btn-primary">➕ Add First Employee</a>
+    {% endif %}
+  </div>
+{% endif %}
+
+{% endblock %}
