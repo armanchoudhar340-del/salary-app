@@ -592,6 +592,14 @@ body::before {
 .emp-card:nth-child(7) { animation-delay: .36s; }
 .emp-card:nth-child(8) { animation-delay: .42s; }
 
+.emp-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .emp-card-name {
   font-size: 20px;
   font-weight: 800;
@@ -607,6 +615,43 @@ body::before {
   border-radius: 4px;
   background: var(--gradient-primary);
   flex-shrink: 0;
+}
+
+.badge-joining-today {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  letter-spacing: .3px;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+  animation: pulse-badge 2s infinite ease-in-out;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.today-tag {
+  background: var(--green-bg);
+  color: var(--green-dark);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+
+.joining-val {
+  color: var(--gray-700);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
 }
 
 .emp-card-rows { display: flex; flex-direction: column; gap: 10px; }
@@ -687,10 +732,28 @@ body::before {
   pointer-events: none;
 }
 
+.profile-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  position: relative;
+}
+
 .profile-name {
   font-size: 28px;
   font-weight: 800;
-  margin-bottom: 20px;
+  position: relative;
+}
+
+.profile-meta {
+  font-size: 13px;
+  opacity: .92;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   position: relative;
 }
 

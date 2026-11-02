@@ -4,26 +4,103 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash, g
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_POSTGRES = True
+except ImportError:
+    HAS_POSTGRES = False
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "salary_app_secret_key_2024")
 
-# On Railway, use /data/ volume for persistent storage
-# Locally, use the app directory
+# Storage & Database configuration
+# If DATABASE_URL is provided, use PostgreSQL (for Render / Production)
+# Otherwise, fall back to SQLite (salary.db)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", BASE_DIR)
 DATABASE = os.path.join(DATA_DIR, "salary.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 ADMIN_PIN = os.environ.get("ADMIN_PIN", "1234")  # Change this PIN as needed
 
 # --------------------------------------------------------------------------
-# Database helpers
+# Database Adapter (Dual SQLite & PostgreSQL support)
 # --------------------------------------------------------------------------
+
+class RowWrapper:
+    """Provides uniform dictionary and index-based access across SQLite and PostgreSQL."""
+    def __init__(self, d, tuple_vals=None):
+        self._d = dict(d) if isinstance(d, dict) else {}
+        self._t = tuple(tuple_vals if tuple_vals is not None else self._d.values())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._t[key]
+        return self._d[key]
+
+    def get(self, key, default=None):
+        return self._d.get(key, default)
+
+    def keys(self):
+        return self._d.keys()
+
+    def values(self):
+        return self._d.values()
+
+    def items(self):
+        return self._d.items()
+
+
+class PostgresCursorWrapper:
+    def __init__(self, cur):
+        self.cur = cur
+
+    def fetchone(self):
+        row = self.cur.fetchone()
+        if row is None:
+            return None
+        return RowWrapper(row, tuple(row.values()))
+
+    def fetchall(self):
+        rows = self.cur.fetchall()
+        return [RowWrapper(r, tuple(r.values())) for r in rows]
+
+
+class PostgresDBWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, sql, params=()):
+        # Convert ? placeholders to %s for psycopg2
+        sql_pg = sql.replace("?", "%s")
+        cur = self.conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql_pg, params)
+        return PostgresCursorWrapper(cur)
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        self.conn.close()
+
 
 def get_db():
     db = getattr(g, "_database", None)
     if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys = ON")
+        if DATABASE_URL and HAS_POSTGRES:
+            conn = psycopg2.connect(DATABASE_URL)
+            db = g._database = PostgresDBWrapper(conn)
+        else:
+            conn = sqlite3.connect(DATABASE)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            db = g._database = conn
     return db
 
 
@@ -35,28 +112,58 @@ def close_connection(exception):
 
 
 def init_db():
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist for either PostgreSQL or SQLite."""
     with app.app_context():
-        db = get_db()
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS employees (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                name          TEXT    NOT NULL,
-                monthly_salary REAL   NOT NULL,
-                created_at    TEXT    NOT NULL
-            );
+        if DATABASE_URL and HAS_POSTGRES:
+            conn = psycopg2.connect(DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS employees (
+                    id            SERIAL PRIMARY KEY,
+                    name          TEXT NOT NULL,
+                    monthly_salary DOUBLE PRECISION NOT NULL,
+                    joining_date  TEXT,
+                    created_at    TEXT NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS transactions (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id      INTEGER NOT NULL,
-                amount           REAL    NOT NULL,
-                transaction_date TEXT    NOT NULL,
-                transaction_time TEXT    NOT NULL,
-                created_at       TEXT    NOT NULL,
-                FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
-            );
-        """)
-        db.commit()
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id               SERIAL PRIMARY KEY,
+                    employee_id      INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+                    amount           DOUBLE PRECISION NOT NULL,
+                    transaction_date TEXT NOT NULL,
+                    transaction_time TEXT NOT NULL,
+                    created_at       TEXT NOT NULL
+                );
+            """)
+            conn.commit()
+            conn.close()
+        else:
+            db = get_db()
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS employees (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT    NOT NULL,
+                    monthly_salary REAL   NOT NULL,
+                    joining_date  TEXT,
+                    created_at    TEXT    NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    employee_id      INTEGER NOT NULL,
+                    amount           REAL    NOT NULL,
+                    transaction_date TEXT    NOT NULL,
+                    transaction_time TEXT    NOT NULL,
+                    created_at       TEXT    NOT NULL,
+                    FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+                );
+            """)
+            # Ensure joining_date column exists if upgrading existing SQLite DB
+            cols = [r[1] for r in db.execute("PRAGMA table_info(employees)").fetchall()]
+            if "joining_date" not in cols:
+                db.execute("ALTER TABLE employees ADD COLUMN joining_date TEXT")
+                db.execute("UPDATE employees SET joining_date = substr(created_at, 1, 10) WHERE joining_date IS NULL")
+            db.commit()
 
 
 # --------------------------------------------------------------------------
@@ -115,6 +222,7 @@ def dashboard():
     db = get_db()
     search = request.args.get("search", "").strip()
     now = now_ist()
+    today_str = now.strftime("%Y-%m-%d")
     year  = int(request.args.get("year",  now.year))
     month = int(request.args.get("month", now.month))
 
@@ -122,26 +230,43 @@ def dashboard():
 
     if search:
         rows = db.execute(
-            "SELECT * FROM employees WHERE name LIKE ? ORDER BY name COLLATE NOCASE",
+            "SELECT * FROM employees WHERE LOWER(name) LIKE LOWER(?) ORDER BY LOWER(name)",
             (f"%{search}%",)
         ).fetchall()
     else:
-        rows = db.execute("SELECT * FROM employees ORDER BY name COLLATE NOCASE").fetchall()
+        rows = db.execute("SELECT * FROM employees ORDER BY LOWER(name)").fetchall()
 
     employees = []
     for emp in rows:
         total_taken = db.execute(
             """SELECT COALESCE(SUM(amount), 0) FROM transactions
                WHERE employee_id = ?
-                 AND strftime('%Y-%m', transaction_date) = ?""",
+                 AND substr(transaction_date, 1, 7) = ?""",
             (emp["id"], month_str)
         ).fetchone()[0]
+
+        # Joining date calculation
+        j_date = emp["joining_date"] if "joining_date" in emp.keys() and emp["joining_date"] else None
+        if not j_date and emp["created_at"]:
+            j_date = emp["created_at"][:10]
+        if not j_date:
+            j_date = today_str
+
+        is_today = (j_date == today_str)
+        try:
+            joining_formatted = datetime.strptime(j_date, "%Y-%m-%d").strftime("%d %b %Y")
+        except Exception:
+            joining_formatted = j_date
+
         employees.append({
             "id":             emp["id"],
             "name":           emp["name"],
             "monthly_salary": emp["monthly_salary"],
             "total_taken":    total_taken,
             "remaining":      emp["monthly_salary"] - total_taken,
+            "joining_date":   j_date,
+            "joining_formatted": joining_formatted,
+            "is_today":       is_today,
         })
 
     return render_template(
@@ -163,9 +288,11 @@ def dashboard():
 @login_required
 def add_employee():
     error = None
+    today_str = now_ist().strftime("%Y-%m-%d")
     if request.method == "POST":
         name   = request.form.get("name", "").strip()
         salary = request.form.get("monthly_salary", "").strip()
+        joining_date = request.form.get("joining_date", "").strip() or today_str
 
         if not name:
             error = "Please enter the employee name."
@@ -182,14 +309,14 @@ def add_employee():
         if not error:
             db = get_db()
             db.execute(
-                "INSERT INTO employees (name, monthly_salary, created_at) VALUES (?, ?, ?)",
-                (name, salary_val, now_ist().isoformat())
+                "INSERT INTO employees (name, monthly_salary, joining_date, created_at) VALUES (?, ?, ?, ?)",
+                (name, salary_val, joining_date, now_ist().isoformat())
             )
             db.commit()
             flash(f"'{name}' added successfully.", "success")
             return redirect(url_for("dashboard"))
 
-    return render_template("add_employee.html", error=error)
+    return render_template("add_employee.html", error=error, today=today_str)
 
 
 # --------------------------------------------------------------------------
@@ -205,10 +332,18 @@ def edit_employee(emp_id):
         flash("Employee not found.", "error")
         return redirect(url_for("dashboard"))
 
+    today_str = now_ist().strftime("%Y-%m-%d")
+    current_joining = emp["joining_date"] if "joining_date" in emp.keys() and emp["joining_date"] else None
+    if not current_joining and emp["created_at"]:
+        current_joining = emp["created_at"][:10]
+    if not current_joining:
+        current_joining = today_str
+
     error = None
     if request.method == "POST":
         name   = request.form.get("name", "").strip()
         salary = request.form.get("monthly_salary", "").strip()
+        joining_date = request.form.get("joining_date", "").strip() or current_joining
 
         if not name:
             error = "Please enter the employee name."
@@ -224,14 +359,14 @@ def edit_employee(emp_id):
 
         if not error:
             db.execute(
-                "UPDATE employees SET name = ?, monthly_salary = ? WHERE id = ?",
-                (name, salary_val, emp_id)
+                "UPDATE employees SET name = ?, monthly_salary = ?, joining_date = ? WHERE id = ?",
+                (name, salary_val, joining_date, emp_id)
             )
             db.commit()
             flash(f"'{name}' updated successfully.", "success")
             return redirect(url_for("employee_profile", emp_id=emp_id))
 
-    return render_template("edit_employee.html", emp=emp, error=error)
+    return render_template("edit_employee.html", emp=emp, error=error, current_joining=current_joining)
 
 
 # --------------------------------------------------------------------------
@@ -264,14 +399,27 @@ def employee_profile(emp_id):
         return redirect(url_for("dashboard"))
 
     now = now_ist()
+    today_str = now.strftime("%Y-%m-%d")
     year  = int(request.args.get("year",  now.year))
     month = int(request.args.get("month", now.month))
     month_str = f"{year}-{month:02d}"
 
+    j_date = emp["joining_date"] if "joining_date" in emp.keys() and emp["joining_date"] else None
+    if not j_date and emp["created_at"]:
+        j_date = emp["created_at"][:10]
+    if not j_date:
+        j_date = today_str
+
+    is_today = (j_date == today_str)
+    try:
+        joining_formatted = datetime.strptime(j_date, "%Y-%m-%d").strftime("%d %b %Y")
+    except Exception:
+        joining_formatted = j_date
+
     txns = db.execute(
         """SELECT * FROM transactions
            WHERE employee_id = ?
-             AND strftime('%Y-%m', transaction_date) = ?
+             AND substr(transaction_date, 1, 7) = ?
            ORDER BY transaction_date DESC, transaction_time DESC""",
         (emp_id, month_str)
     ).fetchall()
@@ -281,7 +429,7 @@ def employee_profile(emp_id):
 
     # All distinct months that have transactions for this employee
     months_with_data = db.execute(
-        """SELECT DISTINCT strftime('%Y-%m', transaction_date) AS ym
+        """SELECT DISTINCT substr(transaction_date, 1, 7) AS ym
            FROM transactions WHERE employee_id = ?
            ORDER BY ym DESC""",
         (emp_id,)
@@ -298,6 +446,9 @@ def employee_profile(emp_id):
         current_year=now.year,
         current_month=now.month,
         months_with_data=[r["ym"] for r in months_with_data],
+        joining_date=j_date,
+        joining_formatted=joining_formatted,
+        is_today=is_today,
     )
 
 
@@ -370,7 +521,7 @@ def api_employee_summary(emp_id):
         return jsonify({"error": "not found"}), 404
     total = db.execute(
         """SELECT COALESCE(SUM(amount),0) FROM transactions
-           WHERE employee_id=? AND strftime('%Y-%m',transaction_date)=?""",
+           WHERE employee_id=? AND substr(transaction_date, 1, 7)=?""",
         (emp_id, month_str)
     ).fetchone()[0]
     return jsonify({

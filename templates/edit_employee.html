@@ -37,6 +37,17 @@
           required
         >
       </div>
+      <div class="form-group">
+        <label class="form-label" for="joining_date">Joining Date <span class="req">*</span></label>
+        <input
+          id="joining_date"
+          name="joining_date"
+          type="date"
+          class="form-input"
+          value="{{ current_joining }}"
+          required
+        >
+      </div>
       <div class="form-actions">
         <a href="{{ url_for('employee_profile', emp_id=emp['id']) }}" class="btn btn-secondary">Cancel</a>
         <button type="submit" class="btn btn-primary btn-lg">✅ Update</button>

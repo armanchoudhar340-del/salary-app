@@ -61,8 +61,20 @@
   <div class="employee-grid">
     {% for emp in employees %}
     <div class="emp-card">
-      <div class="emp-card-name">{{ emp.name }}</div>
+      <div class="emp-card-header">
+        <div class="emp-card-name">{{ emp.name }}</div>
+        {% if emp.is_today %}
+          <span class="badge-joining-today">✨ Joined Today</span>
+        {% endif %}
+      </div>
       <div class="emp-card-rows">
+        <div class="emp-stat">
+          <span class="emp-stat-label">📅 Joining Date</span>
+          <span class="emp-stat-value joining-val">
+            {{ emp.joining_formatted }}
+            {% if emp.is_today %}<span class="today-tag">Today</span>{% endif %}
+          </span>
+        </div>
         <div class="emp-stat">
           <span class="emp-stat-label">💰 Monthly Salary</span>
           <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>

@@ -1,0 +1,24 @@
+databases:
+  - name: salary-db
+    plan: free
+    databaseName: salary
+    user: salary_user
+
+services:
+  - type: web
+    name: salary-app
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: salary-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PIN
+        value: 1234
+      - key: PYTHON_VERSION
+        value: 3.11.0

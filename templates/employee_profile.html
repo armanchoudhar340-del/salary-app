@@ -19,7 +19,15 @@
 
 <!-- Employee Header Card -->
 <div class="profile-header-card">
-  <div class="profile-name">{{ emp['name'] }}</div>
+  <div class="profile-name-row">
+    <div class="profile-name">{{ emp['name'] }}</div>
+    {% if is_today %}
+      <span class="badge-joining-today">✨ Joined Today</span>
+    {% endif %}
+  </div>
+  <div class="profile-meta">
+    <span>📅 Joined on: <strong>{{ joining_formatted }}</strong></span>
+  </div>
 
   <div class="profile-stats">
     <div class="stat-box stat-salary">
