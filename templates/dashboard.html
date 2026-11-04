@@ -1,15 +1,35 @@
 {% extends "base.html" %}
-{% block title %}All Employees{% endblock %}
+{% block title %}Dashboard{% endblock %}
 {% block content %}
 
 {% set MONTHS_EN = ["","January","February","March","April","May","June","July","August","September","October","November","December"] %}
 
 <div class="page-header">
   <div class="page-header-top">
-    <h1 class="page-title">👥 All Employees</h1>
+    <h1 class="page-title">💼 Salary Dashboard</h1>
     <a href="{{ url_for('add_employee') }}" class="btn btn-primary btn-lg">
       ➕ Add Employee
     </a>
+  </div>
+
+  <!-- Summary Stats -->
+  <div class="summary-bar">
+    <div class="summary-item">
+      <span class="summary-label">👥 Total</span>
+      <span class="summary-value">{{ summary.total_employees }}</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-label">💰 Total Salary</span>
+      <span class="summary-value salary-val">₹{{ "{:,.0f}".format(summary.total_salary) }}</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-label">📤 Total Taken</span>
+      <span class="summary-value taken-val">₹{{ "{:,.0f}".format(summary.total_taken) }}</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-label">💵 Remaining</span>
+      <span class="summary-value remaining-val {% if summary.total_remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(summary.total_remaining) }}</span>
+    </div>
   </div>
 
   <!-- Month Selector -->
@@ -17,6 +37,7 @@
     <span class="month-label">📅 Select Month:</span>
     <form method="GET" action="{{ url_for('dashboard') }}" class="month-form" id="monthForm">
       <input type="hidden" name="search" value="{{ search }}">
+      <input type="hidden" name="tab" value="{{ active_tab }}">
       <select name="month" class="month-select" onchange="document.getElementById('monthForm').submit()">
         {% for m in range(1, 13) %}
           <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>
@@ -41,6 +62,7 @@
   <form method="GET" action="{{ url_for('dashboard') }}" class="search-form">
     <input type="hidden" name="month" value="{{ selected_month }}">
     <input type="hidden" name="year" value="{{ selected_year }}">
+    <input type="hidden" name="tab" value="{{ active_tab }}">
     <div class="search-wrap">
       <span class="search-icon">🔍</span>
       <input
@@ -51,63 +73,325 @@
         class="search-input"
       >
       {% if search %}
-        <a href="{{ url_for('dashboard', month=selected_month, year=selected_year) }}" class="search-clear">✕</a>
+        <a href="{{ url_for('dashboard', month=selected_month, year=selected_year, tab=active_tab) }}" class="search-clear">✕</a>
       {% endif %}
     </div>
   </form>
+
+  <!-- Category Tabs -->
+  <div class="cat-tabs">
+    <a href="{{ url_for('dashboard', month=selected_month, year=selected_year, search=search, tab='all') }}"
+       class="cat-tab {% if active_tab == 'all' %}active{% endif %}">
+      📋 All <span class="cat-count">{{ cat_counts.all }}</span>
+    </a>
+    <a href="{{ url_for('dashboard', month=selected_month, year=selected_year, search=search, tab='Taxi') }}"
+       class="cat-tab cat-tab-taxi {% if active_tab == 'Taxi' %}active{% endif %}">
+      🚖 Taxi <span class="cat-count">{{ cat_counts.Taxi }}</span>
+    </a>
+    <a href="{{ url_for('dashboard', month=selected_month, year=selected_year, search=search, tab='Driver') }}"
+       class="cat-tab cat-tab-driver {% if active_tab == 'Driver' %}active{% endif %}">
+      🚗 Driver <span class="cat-count">{{ cat_counts.Driver }}</span>
+    </a>
+    <a href="{{ url_for('dashboard', month=selected_month, year=selected_year, search=search, tab='Tempo') }}"
+       class="cat-tab cat-tab-tempo {% if active_tab == 'Tempo' %}active{% endif %}">
+      🚚 Tempo <span class="cat-count">{{ cat_counts.Tempo }}</span>
+    </a>
+    <a href="{{ url_for('dashboard', month=selected_month, year=selected_year, search=search, tab='TRP') }}"
+       class="cat-tab cat-tab-trp {% if active_tab == 'TRP' %}active{% endif %}">
+      🚛 TRP <span class="cat-count">{{ cat_counts.TRP }}</span>
+    </a>
+  </div>
 </div>
 
-{% if employees %}
-  <div class="employee-grid">
-    {% for emp in employees %}
-    <div class="emp-card">
-      <div class="emp-card-header">
-        <div class="emp-card-name">{{ emp.name }}</div>
-        {% if emp.is_today %}
-          <span class="badge-joining-today">✨ Joined Today</span>
+<!-- ===== ALL TAB: 3 Columns + TRP ===== -->
+{% if active_tab == 'all' %}
+
+  {% if employees %}
+    <!-- 3-Column Category Layout -->
+    <div class="category-columns">
+
+      <!-- TAXI WALA -->
+      <div class="category-column cat-col-taxi">
+        <div class="category-col-header">
+          <h2 class="category-col-title">🚖 Taxi Wala</h2>
+          <span class="category-col-count">{{ cat_counts.Taxi }} employees</span>
+        </div>
+        {% if taxi_employees %}
+          {% for emp in taxi_employees %}
+            {{ caller_card(emp) if caller_card is defined else "" }}
+            <div class="emp-card emp-card-taxi">
+              <div class="emp-card-header">
+                <div class="emp-card-name">{{ emp.name }}</div>
+                <span class="cat-badge cat-badge-taxi">🚖 Taxi</span>
+              </div>
+              <div class="emp-card-rows">
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📅 Joined</span>
+                  <span class="emp-stat-value joining-val">{{ emp.joining_formatted }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💰 Salary/mo</span>
+                  <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📊 Months</span>
+                  <span class="emp-stat-value">{{ emp.months_count }} mo{% if not emp.months_is_auto %} ✏️{% endif %}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💰 Total Salary</span>
+                  <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.total_salary) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📤 Taken</span>
+                  <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💵 Remaining</span>
+                  <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(emp.remaining) }}</span>
+                </div>
+              </div>
+              <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
+                 class="btn btn-open btn-full">OPEN →</a>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-col">No taxi employees</div>
         {% endif %}
       </div>
-      <div class="emp-card-rows">
-        <div class="emp-stat">
-          <span class="emp-stat-label">📅 Joining Date</span>
-          <span class="emp-stat-value joining-val">
-            {{ emp.joining_formatted }}
-            {% if emp.is_today %}<span class="today-tag">Today</span>{% endif %}
-          </span>
+
+      <!-- DRIVER -->
+      <div class="category-column cat-col-driver">
+        <div class="category-col-header">
+          <h2 class="category-col-title">🚗 Driver</h2>
+          <span class="category-col-count">{{ cat_counts.Driver }} employees</span>
         </div>
-        <div class="emp-stat">
-          <span class="emp-stat-label">💰 Monthly Salary</span>
-          <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
-        </div>
-        <div class="emp-stat">
-          <span class="emp-stat-label">📤 Taken</span>
-          <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
-        </div>
-        <div class="emp-stat">
-          <span class="emp-stat-label">💵 Remaining</span>
-          <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">
-            ₹{{ "{:,.0f}".format(emp.remaining) }}
-          </span>
-        </div>
+        {% if driver_employees %}
+          {% for emp in driver_employees %}
+            <div class="emp-card emp-card-driver">
+              <div class="emp-card-header">
+                <div class="emp-card-name">{{ emp.name }}</div>
+                <span class="cat-badge cat-badge-driver">🚗 Driver</span>
+              </div>
+              <div class="emp-card-rows">
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📅 Joined</span>
+                  <span class="emp-stat-value joining-val">{{ emp.joining_formatted }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💰 Salary/mo</span>
+                  <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📊 Months</span>
+                  <span class="emp-stat-value">{{ emp.months_count }} mo{% if not emp.months_is_auto %} ✏️{% endif %}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💰 Total Salary</span>
+                  <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.total_salary) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📤 Taken</span>
+                  <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💵 Remaining</span>
+                  <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(emp.remaining) }}</span>
+                </div>
+              </div>
+              <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
+                 class="btn btn-open btn-full">OPEN →</a>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-col">No driver employees</div>
+        {% endif %}
       </div>
-      <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
-         class="btn btn-open btn-full">
-        OPEN →
-      </a>
+
+      <!-- TEMPO WALA -->
+      <div class="category-column cat-col-tempo">
+        <div class="category-col-header">
+          <h2 class="category-col-title">🚚 Tempo Wala</h2>
+          <span class="category-col-count">{{ cat_counts.Tempo }} employees</span>
+        </div>
+        {% if tempo_employees %}
+          {% for emp in tempo_employees %}
+            <div class="emp-card emp-card-tempo">
+              <div class="emp-card-header">
+                <div class="emp-card-name">{{ emp.name }}</div>
+                <span class="cat-badge cat-badge-tempo">🚚 Tempo</span>
+              </div>
+              <div class="emp-card-rows">
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📅 Joined</span>
+                  <span class="emp-stat-value joining-val">{{ emp.joining_formatted }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💰 Salary/mo</span>
+                  <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📊 Months</span>
+                  <span class="emp-stat-value">{{ emp.months_count }} mo{% if not emp.months_is_auto %} ✏️{% endif %}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💰 Total Salary</span>
+                  <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.total_salary) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">📤 Taken</span>
+                  <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
+                </div>
+                <div class="emp-stat">
+                  <span class="emp-stat-label">💵 Remaining</span>
+                  <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(emp.remaining) }}</span>
+                </div>
+              </div>
+              <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
+                 class="btn btn-open btn-full">OPEN →</a>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-col">No tempo employees</div>
+        {% endif %}
+      </div>
+
     </div>
-    {% endfor %}
-  </div>
-{% else %}
-  <div class="empty-state">
-    <div class="empty-icon">👤</div>
-    {% if search %}
-      <p>No employee found with name "<strong>{{ search }}</strong>".</p>
-      <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Show All</a>
-    {% else %}
-      <p>No employees added yet.</p>
-      <a href="{{ url_for('add_employee') }}" class="btn btn-primary">➕ Add First Employee</a>
+
+    <!-- TRP Section (separate below) -->
+    {% if trp_employees %}
+    <div class="trp-section">
+      <div class="trp-section-header">
+        <h2 class="trp-section-title">🚛 TRP Wala Log</h2>
+        <span class="cat-count-label">{{ cat_counts.TRP }} records</span>
+      </div>
+      <div class="employee-grid">
+        {% for emp in trp_employees %}
+          <div class="emp-card emp-card-trp">
+            <div class="emp-card-header">
+              <div class="emp-card-name">{{ emp.name }}</div>
+              <span class="cat-badge cat-badge-trp">🚛 TRP</span>
+            </div>
+            <div class="emp-card-rows">
+              <div class="emp-stat">
+                <span class="emp-stat-label">📅 Joined</span>
+                <span class="emp-stat-value joining-val">{{ emp.joining_formatted }}</span>
+              </div>
+              <div class="emp-stat">
+                <span class="emp-stat-label">💰 Salary/mo</span>
+                <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
+              </div>
+              <div class="emp-stat">
+                <span class="emp-stat-label">📊 Months</span>
+                <span class="emp-stat-value">{{ emp.months_count }} mo</span>
+              </div>
+              <div class="emp-stat">
+                <span class="emp-stat-label">💰 Total Salary</span>
+                <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.total_salary) }}</span>
+              </div>
+              <div class="emp-stat">
+                <span class="emp-stat-label">📤 Taken</span>
+                <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
+              </div>
+              <div class="emp-stat">
+                <span class="emp-stat-label">💵 Remaining</span>
+                <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(emp.remaining) }}</span>
+              </div>
+            </div>
+            <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
+               class="btn btn-open btn-full">OPEN →</a>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
     {% endif %}
-  </div>
+
+  {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">👤</div>
+      {% if search %}
+        <p>No employee found with name "<strong>{{ search }}</strong>".</p>
+        <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Show All</a>
+      {% else %}
+        <p>No employees added yet.</p>
+        <a href="{{ url_for('add_employee') }}" class="btn btn-primary">➕ Add First Employee</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+<!-- ===== SINGLE CATEGORY TAB ===== -->
+{% else %}
+
+  {% if active_tab == 'Taxi' %}
+    {% set filtered = taxi_employees %}
+    {% set cat_title = "🚖 Taxi Wala" %}
+    {% set badge_class = "cat-badge-taxi" %}
+  {% elif active_tab == 'Driver' %}
+    {% set filtered = driver_employees %}
+    {% set cat_title = "🚗 Driver" %}
+    {% set badge_class = "cat-badge-driver" %}
+  {% elif active_tab == 'Tempo' %}
+    {% set filtered = tempo_employees %}
+    {% set cat_title = "🚚 Tempo Wala" %}
+    {% set badge_class = "cat-badge-tempo" %}
+  {% elif active_tab == 'TRP' %}
+    {% set filtered = trp_employees %}
+    {% set cat_title = "🚛 TRP Wala" %}
+    {% set badge_class = "cat-badge-trp" %}
+  {% else %}
+    {% set filtered = employees %}
+    {% set cat_title = "📋 All Employees" %}
+    {% set badge_class = "" %}
+  {% endif %}
+
+  <h2 class="filtered-title">{{ cat_title }} <span class="filtered-count">({{ filtered|length }})</span></h2>
+
+  {% if filtered %}
+    <div class="employee-grid">
+      {% for emp in filtered %}
+        <div class="emp-card emp-card-{{ emp.category|lower }}">
+          <div class="emp-card-header">
+            <div class="emp-card-name">{{ emp.name }}</div>
+            <span class="cat-badge {{ emp.category_badge }}">{{ emp.category_icon }} {{ emp.category_name }}</span>
+          </div>
+          <div class="emp-card-rows">
+            <div class="emp-stat">
+              <span class="emp-stat-label">📅 Joined</span>
+              <span class="emp-stat-value joining-val">{{ emp.joining_formatted }}</span>
+            </div>
+            <div class="emp-stat">
+              <span class="emp-stat-label">💰 Salary/mo</span>
+              <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.monthly_salary) }}</span>
+            </div>
+            <div class="emp-stat">
+              <span class="emp-stat-label">📊 Months</span>
+              <span class="emp-stat-value">{{ emp.months_count }} mo{% if not emp.months_is_auto %} ✏️{% endif %}</span>
+            </div>
+            <div class="emp-stat">
+              <span class="emp-stat-label">💰 Total Salary</span>
+              <span class="emp-stat-value salary-val">₹{{ "{:,.0f}".format(emp.total_salary) }}</span>
+            </div>
+            <div class="emp-stat">
+              <span class="emp-stat-label">📤 Taken</span>
+              <span class="emp-stat-value taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</span>
+            </div>
+            <div class="emp-stat">
+              <span class="emp-stat-label">💵 Remaining</span>
+              <span class="emp-stat-value remaining-val {% if emp.remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(emp.remaining) }}</span>
+            </div>
+          </div>
+          <a href="{{ url_for('employee_profile', emp_id=emp.id, month=selected_month, year=selected_year) }}"
+             class="btn btn-open btn-full">OPEN →</a>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">📭</div>
+      <p>No {{ cat_title }} employees found.</p>
+      <a href="{{ url_for('add_employee', category=active_tab) }}" class="btn btn-primary">➕ Add {{ cat_title }}</a>
+    </div>
+  {% endif %}
+
 {% endif %}
 
 {% endblock %}

@@ -21,6 +21,7 @@
 <div class="profile-header-card">
   <div class="profile-name-row">
     <div class="profile-name">{{ emp['name'] }}</div>
+    <span class="cat-badge {{ category_badge }}">{{ category_icon }} {{ category_name }}</span>
     {% if is_today %}
       <span class="badge-joining-today">✨ Joined Today</span>
     {% endif %}
@@ -34,14 +35,54 @@
       <div class="stat-box-label">💰 Monthly Salary</div>
       <div class="stat-box-value">₹{{ "{:,.0f}".format(emp['monthly_salary']) }}</div>
     </div>
+    <div class="stat-box stat-months">
+      <div class="stat-box-label">📊 Months</div>
+      <div class="stat-box-value">{{ months_count }}{% if not months_is_auto %} ✏️{% endif %}</div>
+    </div>
+    <div class="stat-box stat-total-salary">
+      <div class="stat-box-label">💰 Total Salary ({{ months_count }} mo)</div>
+      <div class="stat-box-value">₹{{ "{:,.0f}".format(total_salary) }}</div>
+    </div>
     <div class="stat-box stat-taken">
-      <div class="stat-box-label">📤 Taken</div>
+      <div class="stat-box-label">📤 Total Taken</div>
       <div class="stat-box-value">₹{{ "{:,.0f}".format(total_taken) }}</div>
+    </div>
+    <div class="stat-box stat-month-taken">
+      <div class="stat-box-label">📤 This Month</div>
+      <div class="stat-box-value">₹{{ "{:,.0f}".format(month_taken) }}</div>
     </div>
     <div class="stat-box stat-remaining {% if remaining < 0 %}stat-negative{% endif %}">
       <div class="stat-box-label">💵 Remaining</div>
       <div class="stat-box-value">₹{{ "{:,.0f}".format(remaining) }}</div>
     </div>
+  </div>
+
+  <!-- Payment Status Badge -->
+  <div class="payment-status-row">
+    {% if remaining <= 0 %}
+      <span class="status-badge status-paid">✅ Fully Paid</span>
+    {% elif total_taken > 0 and remaining > 0 %}
+      <span class="status-badge status-partial">⏳ Partially Paid</span>
+    {% else %}
+      <span class="status-badge status-unpaid">❌ Unpaid</span>
+    {% endif %}
+
+    {% if months_count >= 2 and remaining > 0 %}
+      <span class="status-badge status-multi-month">⚠️ {{ months_count }} Months Pending</span>
+    {% endif %}
+  </div>
+
+  <!-- Set Months Quick Form -->
+  <div class="set-months-bar">
+    <form method="POST" action="{{ url_for('set_employee_months', emp_id=emp['id']) }}" class="set-months-form">
+      <span class="set-months-label">📊 Salary Period:</span>
+      <select name="months" class="month-select set-months-select" onchange="this.form.submit()">
+        <option value="auto" {% if months_is_auto %}selected{% endif %}>Auto ({{ auto_months }} mo)</option>
+        {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if not months_is_auto and months_count == m %}selected{% endif %}>{{ m }} Month{{ 's' if m > 1 else '' }}</option>
+        {% endfor %}
+      </select>
+    </form>
   </div>
 
   <!-- Month Selector -->
@@ -72,12 +113,12 @@
 <!-- Add Money Taken Form -->
 {% if selected_month == current_month and selected_year == current_year %}
 <div class="add-txn-section">
-  <h2 class="section-title">💵 Money Taken</h2>
+  <h2 class="section-title">💵 Money Taken / Payment</h2>
   <form method="POST"
         action="{{ url_for('add_transaction', emp_id=emp['id']) }}"
         class="add-txn-form"
         id="addTxnForm"
-        onsubmit="return validateAmount()">
+        onsubmit="return validateAndDisable()">
     <div class="add-txn-row">
       <input
         type="number"
@@ -89,11 +130,11 @@
         step="1"
         required
       >
-      <button type="submit" class="btn btn-success btn-lg add-txn-btn">
+      <button type="submit" class="btn btn-success btn-lg add-txn-btn" id="submitBtn">
         ✅ Save
       </button>
     </div>
-    <p class="txn-hint">📝 Date and time will be saved automatically.</p>
+    <p class="txn-hint">📝 Date and time will be saved automatically. Remaining: ₹{{ "{:,.0f}".format(remaining) }}</p>
   </form>
 </div>
 {% else %}
@@ -101,6 +142,37 @@
   📂 This is past month data — view only.
 </div>
 {% endif %}
+
+<!-- Salary Ledger Summary -->
+<div class="ledger-section">
+  <h2 class="section-title">📒 Salary Ledger</h2>
+  <div class="ledger-grid">
+    <div class="ledger-item">
+      <span class="ledger-label">Monthly Salary</span>
+      <span class="ledger-value">₹{{ "{:,.0f}".format(emp['monthly_salary']) }}</span>
+    </div>
+    <div class="ledger-item">
+      <span class="ledger-label">Months Count</span>
+      <span class="ledger-value">{{ months_count }}</span>
+    </div>
+    <div class="ledger-item">
+      <span class="ledger-label">Total Salary Earned</span>
+      <span class="ledger-value salary-val">₹{{ "{:,.0f}".format(total_salary) }}</span>
+    </div>
+    <div class="ledger-item">
+      <span class="ledger-label">Total Payments/Advances</span>
+      <span class="ledger-value taken-val">₹{{ "{:,.0f}".format(total_taken) }}</span>
+    </div>
+    <div class="ledger-item">
+      <span class="ledger-label">This Month Taken</span>
+      <span class="ledger-value taken-val">₹{{ "{:,.0f}".format(month_taken) }}</span>
+    </div>
+    <div class="ledger-item ledger-highlight">
+      <span class="ledger-label">Outstanding Balance</span>
+      <span class="ledger-value remaining-val {% if remaining < 0 %}negative{% endif %}">₹{{ "{:,.0f}".format(remaining) }}</span>
+    </div>
+  </div>
+</div>
 
 <!-- Transaction History -->
 <div class="txn-section">
@@ -139,8 +211,8 @@
       </tbody>
       <tfoot>
         <tr class="txn-total-row">
-          <td colspan="2"><strong>Total</strong></td>
-          <td class="txn-amount"><strong>₹{{ "{:,.0f}".format(total_taken) }}</strong></td>
+          <td colspan="2"><strong>Total This Month</strong></td>
+          <td class="txn-amount"><strong>₹{{ "{:,.0f}".format(month_taken) }}</strong></td>
           <td></td>
         </tr>
       </tfoot>
@@ -154,13 +226,33 @@
   {% endif %}
 </div>
 
+<!-- Months with Data -->
+{% if months_with_data %}
+<div class="months-nav-section">
+  <h3 class="section-title">📅 Months with Transactions</h3>
+  <div class="months-nav-list">
+    {% for ym in months_with_data %}
+      {% set ym_parts = ym.split('-') %}
+      {% set MONTHS_SHORT2 = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"] %}
+      <a href="{{ url_for('employee_profile', emp_id=emp['id'], month=ym_parts[1]|int, year=ym_parts[0]|int) }}"
+         class="month-nav-btn {% if ym == '{:04d}-{:02d}'.format(selected_year, selected_month) %}active{% endif %}">
+        {{ MONTHS_SHORT2[ym_parts[1]|int] }} {{ ym_parts[0] }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <script>
-function validateAmount() {
+function validateAndDisable() {
   const val = parseFloat(document.getElementById('amountInput').value);
   if (!val || val <= 0) {
     alert('Please enter a valid amount.');
     return false;
   }
+  // Prevent double-click
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('submitBtn').textContent = '⏳ Saving...';
   return true;
 }
 </script>

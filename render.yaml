@@ -22,3 +22,4 @@ services:
         value: 1234
       - key: PYTHON_VERSION
         value: 3.11.0
+

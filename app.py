@@ -119,11 +119,13 @@ def init_db():
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS employees (
-                    id            SERIAL PRIMARY KEY,
-                    name          TEXT NOT NULL,
-                    monthly_salary DOUBLE PRECISION NOT NULL,
-                    joining_date  TEXT,
-                    created_at    TEXT NOT NULL
+                    id              SERIAL PRIMARY KEY,
+                    name            TEXT NOT NULL,
+                    category        TEXT DEFAULT 'Driver',
+                    monthly_salary  DOUBLE PRECISION NOT NULL,
+                    joining_date    TEXT,
+                    months_override INTEGER DEFAULT NULL,
+                    created_at      TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS transactions (
@@ -141,11 +143,13 @@ def init_db():
             db = get_db()
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS employees (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name          TEXT    NOT NULL,
-                    monthly_salary REAL   NOT NULL,
-                    joining_date  TEXT,
-                    created_at    TEXT    NOT NULL
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name            TEXT    NOT NULL,
+                    category        TEXT    DEFAULT 'Driver',
+                    monthly_salary  REAL    NOT NULL,
+                    joining_date    TEXT,
+                    months_override INTEGER DEFAULT NULL,
+                    created_at      TEXT    NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS transactions (
@@ -158,25 +162,52 @@ def init_db():
                     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
                 );
             """)
-            # Ensure joining_date column exists if upgrading existing SQLite DB
+            # Ensure columns exist if upgrading existing SQLite DB
             cols = [r[1] for r in db.execute("PRAGMA table_info(employees)").fetchall()]
             if "joining_date" not in cols:
                 db.execute("ALTER TABLE employees ADD COLUMN joining_date TEXT")
                 db.execute("UPDATE employees SET joining_date = substr(created_at, 1, 10) WHERE joining_date IS NULL")
+            if "category" not in cols:
+                db.execute("ALTER TABLE employees ADD COLUMN category TEXT DEFAULT 'Driver'")
+                db.execute("UPDATE employees SET category = 'Driver' WHERE category IS NULL")
+            if "months_override" not in cols:
+                db.execute("ALTER TABLE employees ADD COLUMN months_override INTEGER DEFAULT NULL")
             db.commit()
 
 
 # --------------------------------------------------------------------------
-# Utility
+# Utility & Categories
 # --------------------------------------------------------------------------
 
 IST = ZoneInfo("Asia/Kolkata")
+
+CATEGORIES = [
+    {"id": "Taxi",   "name": "Taxi Wala",   "icon": "🚖", "badge_class": "cat-taxi"},
+    {"id": "Driver", "name": "Driver",      "icon": "🚗", "badge_class": "cat-driver"},
+    {"id": "Tempo",  "name": "Tempo Wala",  "icon": "🚚", "badge_class": "cat-tempo"},
+    {"id": "TRP",    "name": "TRP Wala",    "icon": "🚛", "badge_class": "cat-trp"},
+]
+CATEGORY_NAMES = {c["id"]: c["name"] for c in CATEGORIES}
+CATEGORY_ICONS = {c["id"]: c["icon"] for c in CATEGORIES}
 
 def now_ist():
     return datetime.now(IST)
 
 def format_inr(amount):
     return f"₹{amount:,.0f}"
+
+def calculate_months(joining_date, year, month):
+    """Calculates elapsed months from joining_date up to (year, month). Returns at least 1."""
+    if not joining_date:
+        return 1
+    try:
+        j_year = int(joining_date[:4])
+        j_month = int(joining_date[5:7])
+        if (year, month) < (j_year, j_month):
+            return 1
+        return (year - j_year) * 12 + (month - j_month) + 1
+    except Exception:
+        return 1
 
 
 # --------------------------------------------------------------------------
@@ -221,6 +252,7 @@ def login_required(f):
 def dashboard():
     db = get_db()
     search = request.args.get("search", "").strip()
+    active_tab = request.args.get("tab", "all").strip()
     now = now_ist()
     today_str = now.strftime("%Y-%m-%d")
     year  = int(request.args.get("year",  now.year))
@@ -238,14 +270,6 @@ def dashboard():
 
     employees = []
     for emp in rows:
-        total_taken = db.execute(
-            """SELECT COALESCE(SUM(amount), 0) FROM transactions
-               WHERE employee_id = ?
-                 AND substr(transaction_date, 1, 7) = ?""",
-            (emp["id"], month_str)
-        ).fetchone()[0]
-
-        # Joining date calculation
         j_date = emp["joining_date"] if "joining_date" in emp.keys() and emp["joining_date"] else None
         if not j_date and emp["created_at"]:
             j_date = emp["created_at"][:10]
@@ -258,25 +282,92 @@ def dashboard():
         except Exception:
             joining_formatted = j_date
 
+        # Calculate months
+        months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] else None
+        if months_override and months_override >= 1:
+            months_count = months_override
+            months_is_auto = False
+        else:
+            months_count = calculate_months(j_date, year, month)
+            months_is_auto = True
+
+        total_salary = months_count * emp["monthly_salary"]
+
+        # Advances taken up to selected month (cumulative)
+        total_taken = db.execute(
+            """SELECT COALESCE(SUM(amount), 0) FROM transactions
+               WHERE employee_id = ?
+                 AND substr(transaction_date, 1, 7) <= ?""",
+            (emp["id"], month_str)
+        ).fetchone()[0]
+
+        # Advances taken in THIS month only
+        month_taken = db.execute(
+            """SELECT COALESCE(SUM(amount), 0) FROM transactions
+               WHERE employee_id = ?
+                 AND substr(transaction_date, 1, 7) = ?""",
+            (emp["id"], month_str)
+        ).fetchone()[0]
+
+        category = emp["category"] if "category" in emp.keys() and emp["category"] else "Driver"
+        cat_info = next((c for c in CATEGORIES if c["id"] == category), CATEGORIES[1])
+
         employees.append({
             "id":             emp["id"],
             "name":           emp["name"],
+            "category":       category,
+            "category_name":  cat_info["name"],
+            "category_icon":  cat_info["icon"],
+            "category_badge": cat_info["badge_class"],
             "monthly_salary": emp["monthly_salary"],
+            "months_count":   months_count,
+            "months_is_auto": months_is_auto,
+            "total_salary":   total_salary,
             "total_taken":    total_taken,
-            "remaining":      emp["monthly_salary"] - total_taken,
+            "month_taken":    month_taken,
+            "remaining":      total_salary - total_taken,
             "joining_date":   j_date,
             "joining_formatted": joining_formatted,
             "is_today":       is_today,
         })
 
+    # Group employees by category for 3 columns (+ TRP)
+    taxi_employees   = [e for e in employees if e["category"] == "Taxi"]
+    driver_employees = [e for e in employees if e["category"] == "Driver"]
+    tempo_employees  = [e for e in employees if e["category"] == "Tempo"]
+    trp_employees    = [e for e in employees if e["category"] == "TRP"]
+
+    cat_counts = {
+        "all":    len(employees),
+        "Taxi":   len(taxi_employees),
+        "Driver": len(driver_employees),
+        "Tempo":  len(tempo_employees),
+        "TRP":    len(trp_employees),
+    }
+
+    summary = {
+        "total_employees": len(employees),
+        "total_salary":    sum(e["total_salary"] for e in employees),
+        "total_taken":     sum(e["total_taken"] for e in employees),
+        "total_remaining": sum(e["remaining"] for e in employees),
+    }
+
     return render_template(
         "dashboard.html",
         employees=employees,
+        taxi_employees=taxi_employees,
+        driver_employees=driver_employees,
+        tempo_employees=tempo_employees,
+        trp_employees=trp_employees,
+        cat_counts=cat_counts,
+        summary=summary,
+        active_tab=active_tab,
         search=search,
         selected_year=year,
         selected_month=month,
         current_year=now.year,
         current_month=now.month,
+        categories=CATEGORIES,
     )
 
 
@@ -289,10 +380,17 @@ def dashboard():
 def add_employee():
     error = None
     today_str = now_ist().strftime("%Y-%m-%d")
+    selected_category = request.args.get("category", "Driver").strip()
+    if selected_category not in CATEGORY_NAMES:
+        selected_category = "Driver"
+
     if request.method == "POST":
         name   = request.form.get("name", "").strip()
         salary = request.form.get("monthly_salary", "").strip()
+        category = request.form.get("category", "Driver").strip()
         joining_date = request.form.get("joining_date", "").strip() or today_str
+        months = request.form.get("months_override", "").strip()
+        months_override = int(months) if months and months.isdigit() else None
 
         if not name:
             error = "Please enter the employee name."
@@ -309,14 +407,20 @@ def add_employee():
         if not error:
             db = get_db()
             db.execute(
-                "INSERT INTO employees (name, monthly_salary, joining_date, created_at) VALUES (?, ?, ?, ?)",
-                (name, salary_val, joining_date, now_ist().isoformat())
+                "INSERT INTO employees (name, category, monthly_salary, joining_date, months_override, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (name, category, salary_val, joining_date, months_override, now_ist().isoformat())
             )
             db.commit()
-            flash(f"'{name}' added successfully.", "success")
-            return redirect(url_for("dashboard"))
+            flash(f"'{name}' ({CATEGORY_NAMES.get(category, category)}) added successfully.", "success")
+            return redirect(url_for("dashboard", tab=category))
 
-    return render_template("add_employee.html", error=error, today=today_str)
+    return render_template(
+        "add_employee.html",
+        error=error,
+        today=today_str,
+        categories=CATEGORIES,
+        selected_category=selected_category
+    )
 
 
 # --------------------------------------------------------------------------
@@ -339,11 +443,17 @@ def edit_employee(emp_id):
     if not current_joining:
         current_joining = today_str
 
+    current_category = emp["category"] if "category" in emp.keys() and emp["category"] else "Driver"
+    current_months = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] else ""
+
     error = None
     if request.method == "POST":
         name   = request.form.get("name", "").strip()
+        category = request.form.get("category", "Driver").strip()
         salary = request.form.get("monthly_salary", "").strip()
         joining_date = request.form.get("joining_date", "").strip() or current_joining
+        months = request.form.get("months_override", "").strip()
+        months_override = int(months) if months and months.isdigit() else None
 
         if not name:
             error = "Please enter the employee name."
@@ -359,14 +469,22 @@ def edit_employee(emp_id):
 
         if not error:
             db.execute(
-                "UPDATE employees SET name = ?, monthly_salary = ?, joining_date = ? WHERE id = ?",
-                (name, salary_val, joining_date, emp_id)
+                "UPDATE employees SET name = ?, category = ?, monthly_salary = ?, joining_date = ?, months_override = ? WHERE id = ?",
+                (name, category, salary_val, joining_date, months_override, emp_id)
             )
             db.commit()
             flash(f"'{name}' updated successfully.", "success")
             return redirect(url_for("employee_profile", emp_id=emp_id))
 
-    return render_template("edit_employee.html", emp=emp, error=error, current_joining=current_joining)
+    return render_template(
+        "edit_employee.html",
+        emp=emp,
+        error=error,
+        current_joining=current_joining,
+        current_category=current_category,
+        current_months=current_months,
+        categories=CATEGORIES
+    )
 
 
 # --------------------------------------------------------------------------
@@ -416,6 +534,18 @@ def employee_profile(emp_id):
     except Exception:
         joining_formatted = j_date
 
+    # Months calculation
+    months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] else None
+    auto_months = calculate_months(j_date, year, month)
+    if months_override and months_override >= 1:
+        months_count = months_override
+        months_is_auto = False
+    else:
+        months_count = auto_months
+        months_is_auto = True
+
+    total_salary = months_count * emp["monthly_salary"]
+
     txns = db.execute(
         """SELECT * FROM transactions
            WHERE employee_id = ?
@@ -424,8 +554,21 @@ def employee_profile(emp_id):
         (emp_id, month_str)
     ).fetchall()
 
-    total_taken = sum(t["amount"] for t in txns)
-    remaining   = emp["monthly_salary"] - total_taken
+    month_taken = sum(t["amount"] for t in txns)
+
+    # All transactions up to selected month (cumulative)
+    all_taken_row = db.execute(
+        """SELECT COALESCE(SUM(amount), 0) FROM transactions
+           WHERE employee_id = ?
+             AND substr(transaction_date, 1, 7) <= ?""",
+        (emp_id, month_str)
+    ).fetchone()
+    total_taken = all_taken_row[0] if all_taken_row else month_taken
+
+    remaining = total_salary - total_taken
+
+    category = emp["category"] if "category" in emp.keys() and emp["category"] else "Driver"
+    cat_info = next((c for c in CATEGORIES if c["id"] == category), CATEGORIES[1])
 
     # All distinct months that have transactions for this employee
     months_with_data = db.execute(
@@ -439,7 +582,16 @@ def employee_profile(emp_id):
         "employee_profile.html",
         emp=emp,
         txns=txns,
+        category=category,
+        category_name=cat_info["name"],
+        category_icon=cat_info["icon"],
+        category_badge=cat_info["badge_class"],
+        months_count=months_count,
+        auto_months=auto_months,
+        months_is_auto=months_is_auto,
+        total_salary=total_salary,
         total_taken=total_taken,
+        month_taken=month_taken,
         remaining=remaining,
         selected_year=year,
         selected_month=month,
@@ -450,6 +602,29 @@ def employee_profile(emp_id):
         joining_formatted=joining_formatted,
         is_today=is_today,
     )
+
+
+# --------------------------------------------------------------------------
+# Quick Months Adjuster (from Profile)
+# --------------------------------------------------------------------------
+
+@app.route("/employee/<int:emp_id>/set-months", methods=["POST"])
+@login_required
+def set_employee_months(emp_id):
+    months = request.form.get("months", "").strip()
+    db = get_db()
+    if months == "auto" or not months:
+        db.execute("UPDATE employees SET months_override = NULL WHERE id = ?", (emp_id,))
+    else:
+        try:
+            m_val = int(months)
+            if m_val >= 1:
+                db.execute("UPDATE employees SET months_override = ? WHERE id = ?", (m_val, emp_id))
+        except ValueError:
+            pass
+    db.commit()
+    flash("Salary period updated.", "success")
+    return redirect(url_for("employee_profile", emp_id=emp_id))
 
 
 # --------------------------------------------------------------------------
