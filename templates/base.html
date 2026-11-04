@@ -17,7 +17,10 @@
         <span class="brand-icon">💼</span>
         <span class="brand-text">Salary Manager</span>
       </a>
-      <a href="{{ url_for('logout') }}" class="btn btn-logout">🚪 Logout</a>
+      <div class="header-nav-actions">
+        <a href="{{ url_for('reports') }}" class="btn btn-header-reports">📊 Reports & Backup</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-logout">🚪 Logout</a>
+      </div>
     </div>
   </header>
   {% endif %}

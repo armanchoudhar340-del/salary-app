@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Reports & Backup{% endblock %}
+{% block content %}
+
+<div class="reports-page">
+  <div class="profile-topbar no-print">
+    <a href="{{ url_for('dashboard') }}" class="back-link">← Back to Dashboard</a>
+    <div class="profile-actions">
+      <button onclick="window.print()" class="btn btn-secondary">🖨️ Print / PDF</button>
+      <a href="{{ url_for('export_csv') }}" class="btn btn-success">📥 Download Excel (CSV)</a>
+      <a href="{{ url_for('download_backup') }}" class="btn btn-primary">💾 Save Backup (JSON)</a>
+    </div>
+  </div>
+
+  <div class="reports-header-card">
+    <div class="reports-title-row">
+      <h1 class="page-title">📊 Complete Salary Report & Data Safety</h1>
+      <span class="report-timestamp">Generated on: {{ generated_at }}</span>
+    </div>
+    <p class="reports-subtitle">
+      If your database ever resets or data disappears, you can restore everything instantly using the backup tools below.
+    </p>
+
+    <!-- Summary Numbers -->
+    <div class="profile-stats">
+      <div class="stat-box">
+        <div class="stat-box-label">👥 Total Employees</div>
+        <div class="stat-box-value">{{ summary.total_employees }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">💰 Total Salary Due</div>
+        <div class="stat-box-value salary-val">₹{{ "{:,.0f}".format(summary.total_salary) }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">📤 Total Taken/Advances</div>
+        <div class="stat-box-value taken-val">₹{{ "{:,.0f}".format(summary.total_taken) }}</div>
+      </div>
+      <div class="stat-box {% if summary.total_remaining < 0 %}stat-negative{% endif %}">
+        <div class="stat-box-label">💵 Outstanding Remaining</div>
+        <div class="stat-box-value remaining-val">₹{{ "{:,.0f}".format(summary.total_remaining) }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Emergency Recovery Box (No print) -->
+  <div class="restore-card no-print">
+    <div class="restore-header">
+      <div class="restore-icon">🔄</div>
+      <div>
+        <h2 class="restore-title">Emergency Data Restore</h2>
+        <p class="restore-subtitle">If you accidentally lose data or switch devices, choose your saved backup JSON file to restore all records.</p>
+      </div>
+    </div>
+    <form method="POST" action="{{ url_for('restore_backup') }}" enctype="multipart/form-data" class="restore-form" onsubmit="return confirm('Restore all records from this backup file?')">
+      <input type="file" name="backup_file" accept=".json" class="form-input restore-file-input" required>
+      <button type="submit" class="btn btn-danger btn-lg">⚡ Restore All Data Now</button>
+    </form>
+  </div>
+
+  <!-- Full Employee Ledger Report Table -->
+  <div class="txn-section reports-table-section">
+    <div class="table-header-row">
+      <h2 class="section-title">📋 All Employees Ledger Summary</h2>
+      <a href="{{ url_for('export_csv') }}" class="btn btn-secondary no-print">📥 Export to Excel</a>
+    </div>
+
+    {% if employees %}
+    <div class="txn-table-wrap">
+      <table class="txn-table reports-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Name</th>
+            <th>Category</th>
+            <th>Joined</th>
+            <th>Salary / mo</th>
+            <th>Months</th>
+            <th>Total Salary</th>
+            <th>Taken</th>
+            <th>Remaining</th>
+            <th class="no-print">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for emp in employees %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td class="emp-name-cell">
+              <strong>{{ emp.name }}</strong>
+              {% if emp.is_future %}
+                <span class="badge-joining-future">Upcoming</span>
+              {% elif emp.is_today %}
+                <span class="badge-joining-today">Today</span>
+              {% endif %}
+            </td>
+            <td>
+              <span class="cat-badge {{ emp.category_badge }}">
+                {{ emp.category_icon }} {{ emp.category_name }}
+              </span>
+            </td>
+            <td>{{ emp.joining_formatted }}</td>
+            <td>₹{{ "{:,.0f}".format(emp.monthly_salary) }}</td>
+            <td><strong>{{ emp.months_count }} mo</strong></td>
+            <td class="salary-val">₹{{ "{:,.0f}".format(emp.total_salary) }}</td>
+            <td class="taken-val">₹{{ "{:,.0f}".format(emp.total_taken) }}</td>
+            <td class="remaining-val {% if emp.remaining < 0 %}negative{% endif %}">
+              <strong>₹{{ "{:,.0f}".format(emp.remaining) }}</strong>
+            </td>
+            <td class="no-print">
+              <a href="{{ url_for('employee_profile', emp_id=emp.id) }}" class="btn btn-secondary btn-sm">Profile →</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr class="txn-total-row">
+            <td colspan="6"><strong>GRAND TOTAL ({{ summary.total_employees }} Employees)</strong></td>
+            <td class="salary-val"><strong>₹{{ "{:,.0f}".format(summary.total_salary) }}</strong></td>
+            <td class="taken-val"><strong>₹{{ "{:,.0f}".format(summary.total_taken) }}</strong></td>
+            <td class="remaining-val"><strong>₹{{ "{:,.0f}".format(summary.total_remaining) }}</strong></td>
+            <td class="no-print"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty-state empty-state-sm">
+        <p>No employee records found.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Transactions Log -->
+  <div class="txn-section reports-table-section">
+    <div class="table-header-row">
+      <h2 class="section-title">💸 Recent Payment & Advance Transactions</h2>
+      <span class="cat-count-label">{{ txns|length }} entries</span>
+    </div>
+
+    {% if txns %}
+    <div class="txn-table-wrap">
+      <table class="txn-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Employee</th>
+            <th>Category</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in txns %}
+          <tr>
+            <td class="txn-date">{{ t.transaction_date }}</td>
+            <td class="txn-time">{{ t.transaction_time }}</td>
+            <td><strong>{{ t.employee_name }}</strong></td>
+            <td><span class="cat-badge">{{ t.employee_category }}</span></td>
+            <td class="txn-amount">₹{{ "{:,.0f}".format(t.amount) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty-state empty-state-sm">
+        <p>No transactions recorded yet.</p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+@media print {
+  .no-print, .site-header, .flash-container { display: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+  .reports-header-card { background: none !important; color: #000 !important; box-shadow: none !important; border: 1px solid #ccc !important; }
+  .stat-box { border: 1px solid #ccc !important; color: #000 !important; }
+  .stat-box-value { color: #000 !important; }
+  .txn-section { box-shadow: none !important; border: 1px solid #ccc !important; }
+}
+</style>
+
+{% endblock %}

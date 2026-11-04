@@ -1,8 +1,11 @@
 import sqlite3
 import os
+import json
+import io
+import csv
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash, g
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash, g, Response, send_file
 
 try:
     import psycopg2
@@ -173,6 +176,60 @@ def init_db():
             if "months_override" not in cols:
                 db.execute("ALTER TABLE employees ADD COLUMN months_override INTEGER DEFAULT NULL")
             db.commit()
+
+            # Auto-recovery if database is completely empty (e.g. fresh Render container)
+            count = db.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+            if count == 0:
+                backup_files = [
+                    os.path.join(DATA_DIR, "auto_backup.json"),
+                    os.path.join(BASE_DIR, "auto_backup.json"),
+                    os.path.join(BASE_DIR, "seed_data.json")
+                ]
+                for b_path in backup_files:
+                    if os.path.exists(b_path):
+                        try:
+                            with open(b_path, "r", encoding="utf-8") as f:
+                                b_data = json.load(f)
+                            emp_list = b_data.get("employees", [])
+                            for emp in emp_list:
+                                db.execute(
+                                    """INSERT OR IGNORE INTO employees (id, name, category, monthly_salary, joining_date, months_override, created_at)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                    (emp.get("id"), emp.get("name"), emp.get("category", "Driver"),
+                                     emp.get("monthly_salary", 0), emp.get("joining_date"),
+                                     emp.get("months_override"), emp.get("created_at", now_ist().isoformat()))
+                                )
+                            for txn in b_data.get("transactions", []):
+                                db.execute(
+                                    """INSERT OR IGNORE INTO transactions (id, employee_id, amount, transaction_date, transaction_time, created_at)
+                                       VALUES (?, ?, ?, ?, ?, ?)""",
+                                    (txn.get("id"), txn.get("employee_id"), txn.get("amount", 0),
+                                     txn.get("transaction_date"), txn.get("transaction_time"), txn.get("created_at", now_ist().isoformat()))
+                                )
+                            db.commit()
+                            print(f"[Auto-Recovery] Successfully restored {len(emp_list)} employees from {b_path}")
+                            break
+                        except Exception as e:
+                            print(f"[Auto-Recovery Error] {e}")
+
+
+def save_auto_backup():
+    """Saves a JSON snapshot of the database so data can never be lost."""
+    try:
+        db = get_db()
+        emps = [dict(r) for r in db.execute("SELECT * FROM employees ORDER BY id").fetchall()]
+        txns = [dict(r) for r in db.execute("SELECT * FROM transactions ORDER BY id").fetchall()]
+        data = {
+            "version": "1.0",
+            "saved_at": now_ist().isoformat(),
+            "employees": emps,
+            "transactions": txns
+        }
+        for path in [os.path.join(DATA_DIR, "auto_backup.json"), os.path.join(BASE_DIR, "auto_backup.json")]:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Auto-Backup Error] {e}")
 
 
 # --------------------------------------------------------------------------
@@ -438,6 +495,7 @@ def add_employee():
                 (name, category, salary_val, joining_date, months_override, now_ist().isoformat())
             )
             db.commit()
+            save_auto_backup()
             flash(f"'{name}' ({CATEGORY_NAMES.get(category, category)}) added successfully.", "success")
             return redirect(url_for("dashboard", tab=category))
 
@@ -500,6 +558,7 @@ def edit_employee(emp_id):
                 (name, category, salary_val, joining_date, months_override, emp_id)
             )
             db.commit()
+            save_auto_backup()
             flash(f"'{name}' updated successfully.", "success")
             return redirect(url_for("employee_profile", emp_id=emp_id))
 
@@ -526,6 +585,7 @@ def delete_employee(emp_id):
     if emp:
         db.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
         db.commit()
+        save_auto_backup()
         flash(f"'{emp['name']}' has been deleted.", "success")
     return redirect(url_for("dashboard"))
 
@@ -656,6 +716,7 @@ def set_employee_months(emp_id):
         except ValueError:
             pass
     db.commit()
+    save_auto_backup()
     flash("Salary period updated.", "success")
     return redirect(url_for("employee_profile", emp_id=emp_id))
 
@@ -691,6 +752,7 @@ def add_transaction(emp_id):
         (emp_id, amount, date_str, time_str, now.isoformat())
     )
     db.commit()
+    save_auto_backup()
     flash(f"₹{amount:,.0f} recorded successfully.", "success")
     return redirect(url_for("employee_profile", emp_id=emp_id))
 
@@ -708,6 +770,7 @@ def delete_transaction(txn_id):
         emp_id = txn["employee_id"]
         db.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
         db.commit()
+        save_auto_backup()
         flash("Transaction deleted.", "success")
         return redirect(url_for("employee_profile", emp_id=emp_id))
     flash("Transaction not found.", "error")
@@ -737,6 +800,271 @@ def api_employee_summary(emp_id):
         "total_taken":    total,
         "remaining":      emp["monthly_salary"] - total,
     })
+
+
+# --------------------------------------------------------------------------
+# Reports, Backup & Emergency Recovery
+# --------------------------------------------------------------------------
+
+@app.route("/reports")
+@login_required
+def reports():
+    db = get_db()
+    now = now_ist()
+    today_str = now.strftime("%Y-%m-%d")
+    
+    # All employees with their full ledger summaries
+    rows = db.execute("SELECT * FROM employees ORDER BY category, LOWER(name)").fetchall()
+    employees = []
+    for emp in rows:
+        j_date = emp["joining_date"] or emp["created_at"][:10] if emp["created_at"] else today_str
+        is_today = (j_date == today_str)
+        is_future = (j_date > today_str)
+        try:
+            joining_formatted = datetime.strptime(j_date, "%Y-%m-%d").strftime("%d %b %Y")
+        except Exception:
+            joining_formatted = j_date
+
+        months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] is not None else None
+        if months_override is not None and str(months_override).strip() != "":
+            try:
+                months_count = int(months_override)
+            except ValueError:
+                months_count = calculate_months(j_date, now.year, now.month)
+        else:
+            months_count = calculate_months(j_date, now.year, now.month)
+
+        total_salary = months_count * emp["monthly_salary"]
+        total_taken = db.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE employee_id = ?",
+            (emp["id"],)
+        ).fetchone()[0]
+
+        category = emp["category"] if "category" in emp.keys() and emp["category"] else "Driver"
+        cat_info = next((c for c in CATEGORIES if c["id"] == category), CATEGORIES[1])
+
+        employees.append({
+            "id": emp["id"],
+            "name": emp["name"],
+            "category": category,
+            "category_name": cat_info["name"],
+            "category_icon": cat_info["icon"],
+            "category_badge": cat_info["badge_class"],
+            "monthly_salary": emp["monthly_salary"],
+            "months_count": months_count,
+            "total_salary": total_salary,
+            "total_taken": total_taken,
+            "remaining": total_salary - total_taken,
+            "joining_date": j_date,
+            "joining_formatted": joining_formatted,
+            "is_today": is_today,
+            "is_future": is_future,
+        })
+
+    # Summary
+    summary = {
+        "total_employees": len(employees),
+        "total_salary": sum(e["total_salary"] for e in employees),
+        "total_taken": sum(e["total_taken"] for e in employees),
+        "total_remaining": sum(e["remaining"] for e in employees),
+    }
+
+    # All transactions history
+    txns = db.execute("""
+        SELECT t.id, t.amount, t.transaction_date, t.transaction_time, t.created_at,
+               e.name as employee_name, e.category as employee_category
+        FROM transactions t
+        JOIN employees e ON t.employee_id = e.id
+        ORDER BY t.transaction_date DESC, t.transaction_time DESC
+        LIMIT 100
+    """).fetchall()
+
+    return render_template(
+        "reports.html",
+        employees=employees,
+        summary=summary,
+        txns=txns,
+        generated_at=now.strftime("%d %b %Y, %I:%M %p")
+    )
+
+
+@app.route("/reports/export-csv")
+@login_required
+def export_csv():
+    """Generates and downloads a clean CSV report compatible with Excel."""
+    db = get_db()
+    now = now_ist()
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow(["SALARY MANAGEMENT REPORT"])
+    writer.writerow([f"Generated On: {now.strftime('%d %b %Y, %I:%M %p')}"])
+    writer.writerow([])
+
+    # Employees Table
+    writer.writerow(["EMPLOYEE SALARY LEDGER"])
+    writer.writerow([
+        "ID", "Name", "Category", "Joining Date", "Monthly Salary (INR)",
+        "Completed Months", "Total Salary Due (INR)", "Total Taken/Advances (INR)", "Remaining Balance (INR)"
+    ])
+
+    rows = db.execute("SELECT * FROM employees ORDER BY category, LOWER(name)").fetchall()
+    total_sal = 0
+    total_tak = 0
+    total_rem = 0
+
+    for emp in rows:
+        j_date = emp["joining_date"] or (emp["created_at"][:10] if emp["created_at"] else "")
+        months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] is not None else None
+        if months_override is not None and str(months_override).strip() != "":
+            try:
+                months_count = int(months_override)
+            except ValueError:
+                months_count = calculate_months(j_date, now.year, now.month)
+        else:
+            months_count = calculate_months(j_date, now.year, now.month)
+
+        tot_sal = months_count * emp["monthly_salary"]
+        tot_tak = db.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE employee_id = ?", (emp["id"],)).fetchone()[0]
+        rem = tot_sal - tot_tak
+
+        total_sal += tot_sal
+        total_tak += tot_tak
+        total_rem += rem
+
+        writer.writerow([
+            emp["id"],
+            emp["name"],
+            emp["category"] or "Driver",
+            j_date,
+            f"{emp['monthly_salary']:.0f}",
+            months_count,
+            f"{tot_sal:.0f}",
+            f"{tot_tak:.0f}",
+            f"{rem:.0f}"
+        ])
+
+    writer.writerow([])
+    writer.writerow(["TOTALS", "", "", "", "", "", f"{total_sal:.0f}", f"{total_tak:.0f}", f"{total_rem:.0f}"])
+    writer.writerow([])
+
+    # Transactions Table
+    writer.writerow(["TRANSACTIONS HISTORY"])
+    writer.writerow(["Transaction ID", "Date", "Time", "Employee Name", "Category", "Amount (INR)"])
+    txns = db.execute("""
+        SELECT t.id, t.amount, t.transaction_date, t.transaction_time,
+               e.name as employee_name, e.category as employee_category
+        FROM transactions t
+        JOIN employees e ON t.employee_id = e.id
+        ORDER BY t.transaction_date DESC, t.transaction_time DESC
+    """).fetchall()
+
+    for t in txns:
+        writer.writerow([
+            t["id"],
+            t["transaction_date"],
+            t["transaction_time"],
+            t["employee_name"],
+            t["employee_category"] or "Driver",
+            f"{t['amount']:.0f}"
+        ])
+
+    csv_data = output.getvalue()
+    filename = f"salary_report_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        csv_data,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.route("/reports/download-backup")
+@login_required
+def download_backup():
+    """Downloads a complete JSON database backup file to user's device."""
+    db = get_db()
+    now = now_ist()
+    emps = [dict(r) for r in db.execute("SELECT * FROM employees ORDER BY id").fetchall()]
+    txns = [dict(r) for r in db.execute("SELECT * FROM transactions ORDER BY id").fetchall()]
+
+    backup = {
+        "version": "1.0",
+        "created_at": now.isoformat(),
+        "created_formatted": now.strftime("%d %b %Y, %I:%M %p"),
+        "total_employees": len(emps),
+        "total_transactions": len(txns),
+        "employees": emps,
+        "transactions": txns
+    }
+
+    json_data = json.dumps(backup, indent=2, ensure_ascii=False)
+    filename = f"salary_backup_{now.strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        json_data,
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.route("/reports/restore", methods=["POST"])
+@login_required
+def restore_backup():
+    """Restores database from an uploaded JSON backup file."""
+    if "backup_file" not in request.files:
+        flash("No file was uploaded.", "error")
+        return redirect(url_for("reports"))
+
+    file = request.files["backup_file"]
+    if file.filename == "":
+        flash("Please select a JSON backup file.", "error")
+        return redirect(url_for("reports"))
+
+    try:
+        content = file.read().decode("utf-8")
+        data = json.loads(content)
+
+        emp_list = data.get("employees", [])
+        txn_list = data.get("transactions", [])
+
+        if not emp_list and not txn_list:
+            flash("The uploaded file does not contain valid salary backup data.", "error")
+            return redirect(url_for("reports"))
+
+        db = get_db()
+        emp_restored = 0
+        txn_restored = 0
+
+        for emp in emp_list:
+            if not emp.get("name"):
+                continue
+            db.execute(
+                """INSERT OR REPLACE INTO employees (id, name, category, monthly_salary, joining_date, months_override, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (emp.get("id"), emp.get("name"), emp.get("category", "Driver"),
+                 emp.get("monthly_salary", 0), emp.get("joining_date"),
+                 emp.get("months_override"), emp.get("created_at", now_ist().isoformat()))
+            )
+            emp_restored += 1
+
+        for txn in txn_list:
+            if not txn.get("employee_id"):
+                continue
+            db.execute(
+                """INSERT OR REPLACE INTO transactions (id, employee_id, amount, transaction_date, transaction_time, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (txn.get("id"), txn.get("employee_id"), txn.get("amount", 0),
+                 txn.get("transaction_date"), txn.get("transaction_time"), txn.get("created_at", now_ist().isoformat()))
+            )
+            txn_restored += 1
+
+        db.commit()
+        save_auto_backup()
+        flash(f"Data Restored Successfully! Restored {emp_restored} employees and {txn_restored} transactions.", "success")
+    except Exception as e:
+        flash(f"Error restoring backup: {str(e)}", "error")
+
+    return redirect(url_for("reports"))
 
 
 # --------------------------------------------------------------------------
