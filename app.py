@@ -197,9 +197,9 @@ def format_inr(amount):
     return f"₹{amount:,.0f}"
 
 def calculate_months(joining_date, year=None, month=None):
-    """Calculates elapsed months from joining_date up to (year, month). Returns 0 if joining is in the future."""
+    """Calculates completed elapsed months from joining_date up to (year, month). Returns 0 if less than 1 month."""
     if not joining_date:
-        return 1
+        return 0
     try:
         import calendar
         j_dt = datetime.strptime(joining_date[:10], "%Y-%m-%d").date()
@@ -217,23 +217,18 @@ def calculate_months(joining_date, year=None, month=None):
             _, last_day = calendar.monthrange(year, month)
             target_dt = datetime(year, month, last_day).date()
 
-        # If joining date is in the future (employee has not joined yet)
-        if j_dt > target_dt:
+        # If joining date is in the future relative to target date
+        if target_dt < j_dt:
             return 0
 
-        # If joined in the same month as target
-        if (target_dt.year, target_dt.month) == (j_dt.year, j_dt.month):
-            return 1
-
+        # Calculate completed months difference
         diff = (target_dt.year - j_dt.year) * 12 + (target_dt.month - j_dt.month)
-
-        # If target day of month is before joining day, full cycle has not completed
         if target_dt.day < j_dt.day:
             diff -= 1
 
-        return max(1, diff if diff >= 1 else 1)
+        return max(0, diff)
     except Exception:
-        return 1
+        return 0
 
 
 # --------------------------------------------------------------------------
@@ -310,10 +305,14 @@ def dashboard():
             joining_formatted = j_date
 
         # Calculate months
-        months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] else None
-        if months_override and months_override >= 1:
-            months_count = months_override
-            months_is_auto = False
+        months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] is not None else None
+        if months_override is not None and str(months_override).strip() != "":
+            try:
+                months_count = int(months_override)
+                months_is_auto = False
+            except ValueError:
+                months_count = calculate_months(j_date, year, month)
+                months_is_auto = True
         else:
             months_count = calculate_months(j_date, year, month)
             months_is_auto = True
@@ -564,11 +563,15 @@ def employee_profile(emp_id):
         joining_formatted = j_date
 
     # Months calculation
-    months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] else None
+    months_override = emp["months_override"] if "months_override" in emp.keys() and emp["months_override"] is not None else None
     auto_months = calculate_months(j_date, year, month)
-    if months_override and months_override >= 1:
-        months_count = months_override
-        months_is_auto = False
+    if months_override is not None and str(months_override).strip() != "":
+        try:
+            months_count = int(months_override)
+            months_is_auto = False
+        except ValueError:
+            months_count = auto_months
+            months_is_auto = True
     else:
         months_count = auto_months
         months_is_auto = True
@@ -643,12 +646,12 @@ def employee_profile(emp_id):
 def set_employee_months(emp_id):
     months = request.form.get("months", "").strip()
     db = get_db()
-    if months == "auto" or not months:
+    if months == "auto" or months == "":
         db.execute("UPDATE employees SET months_override = NULL WHERE id = ?", (emp_id,))
     else:
         try:
             m_val = int(months)
-            if m_val >= 1:
+            if m_val >= 0:
                 db.execute("UPDATE employees SET months_override = ? WHERE id = ?", (m_val, emp_id))
         except ValueError:
             pass
