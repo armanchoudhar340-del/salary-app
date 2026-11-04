@@ -196,16 +196,33 @@ def now_ist():
 def format_inr(amount):
     return f"₹{amount:,.0f}"
 
-def calculate_months(joining_date, year, month):
+def calculate_months(joining_date, year=None, month=None):
     """Calculates elapsed months from joining_date up to (year, month). Returns at least 1."""
     if not joining_date:
         return 1
     try:
         j_year = int(joining_date[:4])
         j_month = int(joining_date[5:7])
+        j_day = int(joining_date[8:10]) if len(joining_date) >= 10 else 1
+
+        now = now_ist()
+        if year is None:
+            year = now.year
+        if month is None:
+            month = now.month
+
+        # If selected month is in the future relative to joining month
         if (year, month) < (j_year, j_month):
             return 1
-        return (year - j_year) * 12 + (month - j_month) + 1
+
+        diff = (year - j_year) * 12 + (month - j_month)
+
+        # If viewing current month, check if current day is before joining day
+        if year == now.year and month == now.month:
+            if now.day < j_day:
+                diff -= 1
+
+        return max(1, diff if diff >= 1 else 1)
     except Exception:
         return 1
 
