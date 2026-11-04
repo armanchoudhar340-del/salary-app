@@ -197,30 +197,39 @@ def format_inr(amount):
     return f"₹{amount:,.0f}"
 
 def calculate_months(joining_date, year=None, month=None):
-    """Calculates elapsed months from joining_date up to (year, month). Returns at least 1."""
+    """Calculates elapsed months from joining_date up to (year, month). Returns 0 if joining is in the future."""
     if not joining_date:
         return 1
     try:
-        j_year = int(joining_date[:4])
-        j_month = int(joining_date[5:7])
-        j_day = int(joining_date[8:10]) if len(joining_date) >= 10 else 1
+        import calendar
+        j_dt = datetime.strptime(joining_date[:10], "%Y-%m-%d").date()
+        now = now_ist().date()
 
-        now = now_ist()
         if year is None:
             year = now.year
         if month is None:
             month = now.month
 
-        # If selected month is in the future relative to joining month
-        if (year, month) < (j_year, j_month):
+        # Target date for calculation
+        if year == now.year and month == now.month:
+            target_dt = now
+        else:
+            _, last_day = calendar.monthrange(year, month)
+            target_dt = datetime(year, month, last_day).date()
+
+        # If joining date is in the future (employee has not joined yet)
+        if j_dt > target_dt:
+            return 0
+
+        # If joined in the same month as target
+        if (target_dt.year, target_dt.month) == (j_dt.year, j_dt.month):
             return 1
 
-        diff = (year - j_year) * 12 + (month - j_month)
+        diff = (target_dt.year - j_dt.year) * 12 + (target_dt.month - j_dt.month)
 
-        # If viewing current month, check if current day is before joining day
-        if year == now.year and month == now.month:
-            if now.day < j_day:
-                diff -= 1
+        # If target day of month is before joining day, full cycle has not completed
+        if target_dt.day < j_dt.day:
+            diff -= 1
 
         return max(1, diff if diff >= 1 else 1)
     except Exception:
@@ -294,6 +303,7 @@ def dashboard():
             j_date = today_str
 
         is_today = (j_date == today_str)
+        is_future = (j_date > today_str)
         try:
             joining_formatted = datetime.strptime(j_date, "%Y-%m-%d").strftime("%d %b %Y")
         except Exception:
@@ -346,6 +356,7 @@ def dashboard():
             "joining_date":   j_date,
             "joining_formatted": joining_formatted,
             "is_today":       is_today,
+            "is_future":      is_future,
         })
 
     # Group employees by category for 3 columns (+ TRP)
@@ -546,6 +557,7 @@ def employee_profile(emp_id):
         j_date = today_str
 
     is_today = (j_date == today_str)
+    is_future = (j_date > today_str)
     try:
         joining_formatted = datetime.strptime(j_date, "%Y-%m-%d").strftime("%d %b %Y")
     except Exception:
@@ -618,6 +630,7 @@ def employee_profile(emp_id):
         joining_date=j_date,
         joining_formatted=joining_formatted,
         is_today=is_today,
+        is_future=is_future,
     )
 
 

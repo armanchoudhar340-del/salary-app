@@ -22,12 +22,17 @@
   <div class="profile-name-row">
     <div class="profile-name">{{ emp['name'] }}</div>
     <span class="cat-badge {{ category_badge }}">{{ category_icon }} {{ category_name }}</span>
-    {% if is_today %}
+    {% if is_future %}
+      <span class="badge-joining-future">⏳ Starts {{ joining_formatted }}</span>
+    {% elif is_today %}
       <span class="badge-joining-today">✨ Joined Today</span>
     {% endif %}
   </div>
   <div class="profile-meta">
     <span>📅 Joined on: <strong>{{ joining_formatted }}</strong></span>
+    {% if is_future %}
+      <span class="future-tag">Upcoming</span>
+    {% endif %}
   </div>
 
   <div class="profile-stats">
@@ -59,7 +64,9 @@
 
   <!-- Payment Status Badge -->
   <div class="payment-status-row">
-    {% if remaining <= 0 %}
+    {% if is_future %}
+      <span class="status-badge status-future">⏳ Upcoming (Not Joined Yet — Joining {{ joining_formatted }})</span>
+    {% elif remaining <= 0 %}
       <span class="status-badge status-paid">✅ Fully Paid</span>
     {% elif total_taken > 0 and remaining > 0 %}
       <span class="status-badge status-partial">⏳ Partially Paid</span>
@@ -67,7 +74,7 @@
       <span class="status-badge status-unpaid">❌ Unpaid</span>
     {% endif %}
 
-    {% if months_count >= 2 and remaining > 0 %}
+    {% if months_count >= 2 and remaining > 0 and not is_future %}
       <span class="status-badge status-multi-month">⚠️ {{ months_count }} Months Pending</span>
     {% endif %}
   </div>
